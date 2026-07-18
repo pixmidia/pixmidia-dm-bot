@@ -1,12 +1,12 @@
+import Groq from 'groq-sdk'
 import { Redis } from '@upstash/redis'
-import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 })
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
 const SYSTEM_PROMPT = `Você é a Bia, assistente virtual da Pix Mídia no Instagram.
 A Pix Mídia desenvolve soluções de comunicação interna para empresas:
@@ -68,22 +68,30 @@ async function handleMessage(event) {
 
   const historyKey = `conv:${senderId}`
   const raw = await redis.get(historyKey)
-  const history = Array.isArray(raw) ? raw : []
 
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-2.0-flash-lite',
-    systemInstruction: SYSTEM_PROMPT,
+  let history = []
+  if (Array.isArray(raw) && raw.length > 0 && raw[0].content) {
+    history = raw
+  }
+
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history,
+    { role: 'user', content: messageText },
+  ]
+
+  const completion = await groq.chat.completions.create({
+    model: 'llama-3.3-70b-versatile',
+    messages,
+    max_tokens: 500,
   })
 
-  const chat = model.startChat({ history })
-
-  const result = await chat.sendMessage(messageText)
-  const reply = result.response.text()
+  const reply = completion.choices[0].message.content
 
   const updated = [
     ...history,
-    { role: 'user', parts: [{ text: messageText }] },
-    { role: 'model', parts: [{ text: reply }] },
+    { role: 'user', content: messageText },
+    { role: 'assistant', content: reply },
   ].slice(-30)
 
   await redis.set(historyKey, updated, { ex: 86400 })
