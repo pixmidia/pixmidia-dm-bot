@@ -164,6 +164,8 @@ async function upsertHubSpotContact(data, lifecyclestage) {
     company: data.empresa || '',
     jobtitle: data.cargo || '',
     lifecyclestage,
+    hs_analytics_source: 'SOCIAL_MEDIA',
+    hs_analytics_source_data_1: 'pixmidia-dm-bot',
   }
 
   const searchRes = await fetch(`${api}/crm/v3/objects/contacts/search`, {
