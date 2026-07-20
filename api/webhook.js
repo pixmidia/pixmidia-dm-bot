@@ -105,7 +105,7 @@ async function handleMessage(event) {
 }
 
 async function sendInstagramMessage(recipientId, text) {
-  const url = `https://graph.facebook.com/v21.0/17841440227491398/messages?access_token=${process.env.INSTAGRAM_ACCESS_TOKEN}`
+  const url = `https://graph.instagram.com/v21.0/17841440227491398/messages?access_token=${process.env.INSTAGRAM_ACCESS_TOKEN}`
 
   const res = await fetch(url, {
     method: 'POST',
