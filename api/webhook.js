@@ -118,10 +118,18 @@ async function handleMessage(event) {
   if ((isMQL || isNurture) && !alreadyRegistered) {
     const lifecyclestage = isMQL ? 'marketingqualifiedlead' : 'lead'
     const leadData = await extractLeadData(updated)
-    if (leadData && leadData.email) {
+
+    if (!leadData) {
+      console.log(`[LEAD_DROPPED] senderId=${senderId} — extractLeadData retornou null`)
+    } else if (!leadData.email && !leadData.telefone) {
+      console.log(`[LEAD_DROPPED] senderId=${senderId} — sem email nem telefone. dados: ${JSON.stringify(leadData)}`)
+    } else {
+      if (!leadData.email) {
+        console.log(`[LEAD_SEM_EMAIL] senderId=${senderId} — criando contato só com telefone. dados: ${JSON.stringify(leadData)}`)
+      }
       await upsertHubSpotContact(leadData, lifecyclestage)
       await redis.set(leadKey, lifecyclestage, { ex: 604800 })
-      console.log(`[HUBSPOT] Lead registrado: ${leadData.email} (${lifecyclestage})`)
+      console.log(`[HUBSPOT] Lead registrado: ${leadData.email || leadData.telefone} (${lifecyclestage})`)
     }
   }
 }
@@ -159,7 +167,6 @@ async function upsertHubSpotContact(data, lifecyclestage) {
   const properties = {
     firstname: firstName,
     lastname: lastName,
-    email: data.email,
     phone: data.telefone || '',
     company: data.empresa || '',
     jobtitle: data.cargo || '',
@@ -167,50 +174,50 @@ async function upsertHubSpotContact(data, lifecyclestage) {
     hs_analytics_source: 'SOCIAL_MEDIA',
     hs_analytics_source_data_1: 'pixmidia-dm-bot',
   }
+  if (data.email) properties.email = data.email
 
-  const searchRes = await fetch(`${api}/crm/v3/objects/contacts/search`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      filterGroups: [{
-        filters: [{
-          propertyName: 'email',
-          operator: 'EQ',
-          value: data.email,
-        }],
-      }],
-      properties: ['email'],
-      limit: 1,
-    }),
-  })
+  const hubspotSearch = async (filters) => {
+    const res = await fetch(`${api}/crm/v3/objects/contacts/search`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filterGroups: [{ filters }], properties: ['email', 'phone'], limit: 1 }),
+    })
+    const d = await res.json()
+    return d.results?.[0]?.id || null
+  }
 
-  const searchData = await searchRes.json()
-  const existingId = searchData.results?.[0]?.id
+  // 1. Buscar por email se disponível
+  let existingId = data.email
+    ? await hubspotSearch([{ propertyName: 'email', operator: 'EQ', value: data.email }])
+    : null
+
+  // 2. Fallback: buscar por telefone se não achou pelo email
+  if (!existingId && data.telefone) {
+    const phoneClean = data.telefone.replace(/\D/g, '')
+    existingId = await hubspotSearch([{ propertyName: 'phone', operator: 'CONTAINS_TOKEN', value: phoneClean }])
+  }
+
+  const identifier = data.email || data.telefone
 
   if (existingId) {
     await fetch(`${api}/crm/v3/objects/contacts/${existingId}`, {
       method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ properties }),
     })
-    console.log(`[HUBSPOT] Contato atualizado: ${data.email} (id: ${existingId})`)
+    console.log(`[HUBSPOT] Contato atualizado: ${identifier} (id: ${existingId})`)
   } else {
     const createRes = await fetch(`${api}/crm/v3/objects/contacts`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ properties }),
     })
     const created = await createRes.json()
-    console.log(`[HUBSPOT] Contato criado: ${data.email} (id: ${created.id}, ${lifecyclestage})`)
+    if (created.id) {
+      console.log(`[HUBSPOT] Contato criado: ${identifier} (id: ${created.id}, ${lifecyclestage})`)
+    } else {
+      console.error(`[HUBSPOT_ERROR] Falha ao criar contato ${identifier}:`, JSON.stringify(created))
+    }
   }
 }
 
